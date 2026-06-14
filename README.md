@@ -1,229 +1,409 @@
-# PiCam Server
+# PiCam Server Spectral
 
-PiCam Server provides a Flask based control surface for Raspberry Pi camera modules. It exposes high level HTTP endpoints for preview, still capture, raw frame export, and hardware encoded video recording while also shipping with a Napari dock widget that drives the API from a desktop viewer. The server runs directly on a Raspberry Pi and is intended for remote control over a LAN.
+PiCam Server Spectral provides a Flask-based HTTP control server for Raspberry Pi camera modules and a Napari dock widget for desktop control, raw capture, spectral acquisition, calibration, and preview/recording workflows. The server runs on the Raspberry Pi, exposes camera and spectroscopy endpoints over the LAN, and the Napari client drives those endpoints from a workstation.
+
+The current codebase is split into a Raspberry Pi server (`picam_server_spectral_V8.py`) and a modular Napari client (`widgets.py`, `core.py`, `tabs_control.py`, and `tabs_settings.py`). Configuration is saved to and loaded from `cam_config.json`.
 
 ## Features
-- Detects every connected camera, reports supported sensor modes, and allows hot switching between devices.
-- Streams live MJPEG preview, captures full resolution JPEGs, and records H.264 video with the on board encoder.
-- Exports science friendly data via `/capture_dng` and `/rawframe`, delivering 12 bit DNG files or unpacked Bayer mosaics.
-- Applies manual exposure and gain, or reconfigures preview resolution on the fly through JSON calls.
-- Ships with a Napari dock widget in [napari_plugin.py](napari_plugin.py) for interactive browsing, recording, and data download from a workstation.
-- Includes example scripts and notebooks for raw processing experiments, such as [picamera_example.py](picamera_example.py), [fetch_and_read_dng.ipynb](fetch_and_read_dng.ipynb), and [fetch_and_read_raw.ipynb](fetch_and_read_raw.ipynb).
 
-## Repository Layout
-- [python_server.py](python_server.py) – Main Flask application that wraps Picamera2 for HTTP control.
-- [python_server_clean_api.py](python_server_clean_api.py) – Experimental server exposing a reduced, easier-to-consume REST surface.
-- [napari_plugin.py](napari_plugin.py) – Napari dock widget that drives the primary server API from a desktop viewer.
-- [napari_plugin_clean_api.py](napari_plugin_clean_api.py) – Companion widget targeting the clean API server variant.
-- [experimenting_scripts/picamera_example.py](experimenting_scripts/picamera_example.py) and notebooks in [experimenting_scripts](experimenting_scripts) – Capture and raw-processing walkthroughs.
-- [example_files](example_files) – Reference media for testing and calibration.
-- [tools/show_grid.py](tools/show_grid.py) – Utility to render an exposure grid overlay via the server.
-- [snapshots](snapshots) and [recordings](recordings) – Sample outputs produced during development and testing.
+- Detects connected Picamera2 cameras, reports parsed sensor modes, and supports camera switching by index.
+- Streams MJPEG preview from `/video` and returns one-shot JPEG preview frames from `/snapshot.jpg`.
+- Captures raw still data through `/rawframe`, including accumulation support and `stack`, `mean`, or `sum` combine modes.
+- Captures DNG files through `/capture_dng` and can display DNG previews in Napari when `rawpy` is installed.
+- Records hardware-encoded H.264 video through `/start_recording` and `/stop_recording`.
+- Provides a spectroscopy workflow with full-frame raw capture, single ROI, multiple ROI, and custom ROI acquisition.
+- Supports background/reference spectra, Intensity, Intensity-BG, Transmittance (`T`), and Absorbance (`A`) plotting/export.
+- Supports wavelength calibration using linear, quadratic, cubic, prism/Hartmann, grating, and Cauchy-style models.
+- Saves camera, spectroscopy, saving, and calibration settings in `cam_config.json`.
+- Includes a Napari Locate tab with live view, JPEG snapshots, DNG capture, RAW capture, split-channel display, and an adjustable grid overlay.
+
+## Current Repository Layout
+
+| File | Purpose |
+| --- | --- |
+| `picam_server_spectral_V8.py` | Main Flask/Picamera2 server. Exposes camera control, raw capture, spectral capture, recording, and dashboard endpoints. |
+| `PiCamPlugin.py` | Current launcher script for the desktop Napari control panel. Creates the Napari viewer and docks `PiCamPlugin` as `Pi Control`. |
+| `widgets.py` | Main Napari dock widget/controller. Assembles tabs, stores shared state, saves/loads `cam_config.json`, and applies settings. |
+| `core.py` | Headless client-side logic: settings stores, HTTP request handler, raw decoding, Bayer/CFA channel splitting, spectral math, and calibration functions. |
+| `tabs_control.py` | Napari control tabs: Locate, Spectroscopy, and Video. |
+| `tabs_settings.py` | Napari settings tabs: Photo Settings, Spectral Settings, Saving Settings, and Calibration. |
+| `cam_config.json` | Example/current persisted configuration for camera, spectral acquisition, saving, and wavelength calibration. |
+| `snapshots/` | Server-side temporary still-capture artifacts when using snapshot download endpoints. Created at runtime if needed. |
+| `recordings/` | Server-side H.264 recording output directory. Created at runtime if needed. |
+
+Older names such as `python_server.py`, `python_server2.py`, `napari_plugin.py`, and `napari_plugin_clean_api.py` refer to previous versions and should not be used for this current file set unless those legacy files also exist in your repository.
 
 ## Requirements
-- Raspberry Pi 4 or 5 running a recent 64 bit Raspberry Pi OS with libcamera and Picamera2 packages installed.
-- Python 3.10 or newer with pip.
-- System packages: `libatlas-base-dev`, `python3-pyqt5`, and other Picamera2 prerequisites supplied by Raspberry Pi OS.
-- Python packages:
-	- Flask and its dependencies.
-	- picamera2 (comes from Raspberry Pi repositories).
-	- numpy, opencv-python, requests.
-	- rawpy (optional; only needed if using the Napari DNG preview).
-	- napari and qtpy on the workstation that loads the plugin.
 
-## Installation
-1. Clone the repository onto the Raspberry Pi.
-2. Install Picamera2 system packages (`sudo apt install python3-picamera2 python3-libcamera python3-numpy libcamera-apps`).
-3. Create a Python environment (virtualenv or system) and install Python dependencies.
+### Raspberry Pi server
 
-		pip install flask opencv-python requests rawpy
+- Raspberry Pi 4 or 5 running a recent 64-bit Raspberry Pi OS with libcamera and Picamera2 support.
+- Python 3.10 or newer.
+- System packages commonly needed on the Pi:
 
-		The Napari plugin is typically executed on a desktop machine: create a separate environment there and install `napari[all]` or `napari[pyqt5]` plus `requests`.
+```bash
+sudo apt update
+sudo apt install python3-picamera2 python3-libcamera python3-numpy libcamera-apps python3-opencv
+```
+
+- Python packages used by the server:
+
+```bash
+pip install "Flask<2.3" numpy opencv-python
+```
+
+Picamera2 and libcamera are usually best installed from the Raspberry Pi OS package repositories, not from PyPI. `Flask<2.3` is recommended for the current server code because it still uses Flask's legacy `before_first_request` startup hook; remove this pin after moving startup initialization to a newer Flask-compatible pattern.
+
+### Napari workstation/client
+
+Install the desktop-side packages in a separate environment on the workstation that will run Napari:
+
+```bash
+pip install "napari[pyqt5]" qtpy numpy scipy requests matplotlib opencv-python rawpy
+```
+
+`rawpy` is optional, but it is needed for DNG preview/loading in the Napari client. `scipy` is needed for the non-polynomial calibration fitting models.
 
 ## Running the HTTP Server
-1. Ensure the camera module is attached and enabled in firmware.
-2. From the project root, start the server.
 
-				python python_server2.py
+1. Attach and validate the camera hardware on the Raspberry Pi.
+2. Start the current server from the project directory:
 
-3. The Flask app listens on `0.0.0.0:8080`. Visit `http://<pi-ip>:8080/` to view the built in dashboard, camera list, and endpoint shortcuts.
-4. Use the `/shutdown` button or send a POST request to `/shutdown` for a clean stop.
+```bash
+python picam_server_spectral_V8.py
+```
+
+3. The Flask app listens on `0.0.0.0:8080`.
+4. Open the dashboard from another machine on the LAN:
+
+```text
+http://<pi-ip>:8080/
+```
+
+5. Use `/shutdown` from the dashboard or send a POST request to `/shutdown` for a clean stop.
+
+The server initializes camera details before the first request, then opens the default camera index.
+
+## Running the Napari Control Panel
+
+Run the current Napari client launcher from a workstation that can reach the Pi:
+
+```bash
+python PiCamPlugin.py
+```
+
+`PiCamPlugin.py` creates a Napari viewer, instantiates `PiCamPlugin` from `widgets.py`, docks it as `Pi Control`, and starts the Napari event loop. The project is not yet packaged as an installable Napari plugin, so for now this launcher script is the expected way to start the desktop UI.
+
+Typical workflow:
+
+1. Start `picam_server_spectral_V8.py` on the Raspberry Pi.
+2. Start `widgets.py` on the workstation.
+3. In **General Settings > Photo Settings**, set the server URL, for example `http://192.168.0.197:8080`.
+4. Pick the camera and resolution, then use **Apply Hardware Settings**.
+5. Use **Locate** for live view, JPEG snapshots, DNG capture, raw capture, split-channel display, and grid overlay.
+6. Use **General Settings > Spectral Settings** to choose spectral camera, binning, exposure/gain, accumulation count/mode, and readout setup.
+7. Use **Spectroscopy** for Snap/BG/Ref acquisition, plotting, math mode selection, wavelength-axis display, and CSV export.
+8. Use **Save Config** and **Load Config** to persist/restore `cam_config.json`. Loading a config also applies hardware/spectral settings to the server.
+
+## Configuration File
+
+`cam_config.json` stores four top-level sections:
+
+| Section | Contents |
+| --- | --- |
+| `camera` | Server URL, exposure, gain, and selected resolution. |
+| `spectral` | Plot mode, split-channel setting, export filename, and the nested `ui_settings` payload sent to the server. |
+| `saving` | Filename root, directory, date/time options, delimiter, numeric suffix state, and DNG auto-save preference. |
+| `calibration` | Wavelength calibration coefficients, model type, and pixel/nm calibration points. |
+
+The current sample config uses a polynomial cubic (`poly3`) wavelength calibration and stores spectral ROI/readout settings under `spectral.ui_settings`.
 
 ## Core API Endpoints
+
 | Endpoint | Method | Purpose |
 | --- | --- | --- |
-| `/available_cameras` | GET | JSON catalog of detected cameras and parsed sensor modes. |
-| `/switch_camera/<index>` | GET | Activate another camera by numeric index. |
-| `/video` | GET | MJPEG stream. Supports `?exposure=` microseconds query parameter. |
-| `/snapshot.jpg` | GET | Current RGB frame as JPEG. |
-| `/capture_snapshot` | GET or POST | Captures a still JPEG, optionally bundles preview and raw channels in a ZIP. |
-| `/capture_dng` | GET | Captures a 12 bit DNG still using the highest resolution mode. |
-| `/rawframe` | GET | Captures raw Bayer data. Accepts `shutter`, `gain`, and `mode` (e.g. `4056:3040:12:U`). |
-| `/apply_recording_settings` | POST | JSON payload controlling preview resolution, exposure, and gain. |
-| `/start_recording` / `/stop_recording` | POST | Begin or end hardware encoded H.264 recording. |
-| `/download_recording` | GET | Retrieve the most recent recording. |
-| `/control` | GET | Quick exposure and gain adjustments from the landing page. |
+| `/` | GET | Built-in dashboard with camera list and shortcuts. |
+| `/available_cameras` | GET | JSON list of detected cameras and parsed Picamera2 sensor modes. |
+| `/switch_camera/<index>` | GET | Switch active camera to the requested numeric index. |
+| `/camera-info` | GET | HTML page showing current camera information, controls, and modes. |
+| `/video` | GET | MJPEG preview stream. Supports `?exposure=<microseconds>`. |
+| `/snapshot.jpg` | GET | One-shot JPEG frame. Supports `?camera_index=<index>` for explicit camera selection. |
+| `/capture_snapshot` | GET/POST | Captures a raw TIFF snapshot; default `format=zip` bundles raw TIFF plus preview JPEG when available. `format=raw` returns only the raw TIFF. |
+| `/capture_dng` | GET | Captures a DNG file. Supports `?camera_index=<index>`. |
+| `/rawframe` | GET | Captures raw Bayer frame data. Query parameters include `camera_index`, `exposure`, `gain`, `duration`, `accumulations`, `combine`, and `mode`. |
+| `/apply_recording_settings` | POST | Applies preview/recording resolution, exposure, and gain settings. |
+| `/settings/spectral_acquisition` | GET | Returns persisted spectral acquisition settings. |
+| `/settings/spectral_acquisition` | POST | Saves/applies spectral acquisition settings. |
+| `/spectral_capture` | POST | Captures raw data with spectral ROI settings and returns extracted spectra as JSON. |
+| `/start_recording` | POST | Starts hardware H.264 recording. Accepts JSON/form/query settings including `base`, `resolution`, `exposure_mode`, `exposure_time`, `gain_mode`, and `gain_value`. |
+| `/stop_recording` | POST | Stops active recording and returns the file name. |
+| `/download_recording?file=<name>` | GET | Downloads a recording from `recordings/`; the server deletes the file shortly after download starts. |
+| `/record` | GET | Recording-oriented web page. |
+| `/control` | GET | Quick manual control endpoint. Supports `?exposure=<microseconds>&gain=<float>`. |
 | `/shutdown` | POST | Stops the server and releases the camera. |
 
-Review [python_server2.py](python_server2.py) for detailed parameter handling and error responses.
+## `/rawframe` Details
 
-## Napari Control Panel
-The repository ships a ready to run dock widget in [napari_plugin.py](napari_plugin.py). To use it:
-1. Launch Napari on a desktop with network access to the Pi.
-6. The Video tab triggers `/start_recording` and `/stop_recording` for hands free H.264 capture.
+Example:
 
-## Development Utilities
-The notebooks [fetch_and_read_dng.ipynb](fetch_and_read_dng.ipynb) and [fetch_and_read_raw.ipynb](fetch_and_read_raw.ipynb) demonstrate how to retrieve captures from the API, deserialize raw payloads, and visualize them with NumPy or rawpy. Use [read_raw.ipynb](read_raw.ipynb) for additional experiments decoding packed Bayer data.
-
-### Bayer vs CFA Terminology
-Picamera2 reports a `sensor_format` such as `SRGGB12` that encodes the pixel packing (bit depth, endianness, and whether the frame is still in its Bayer mosaic). The Color Filter Array (CFA) string, on the other hand, names just the RGGB/BGGR pattern that ends up inside the DNG metadata. When you request raw output, binning, HDR compositing, or ISP cropping can cause `sensor_format` and the exported CFA tag to diverge, so treat the format string as a transport description and the CFA as the definitive mosaic layout for demosaicing.
-
-Example: a `/rawframe` capture might report `sensor_format=SRGGB12_CSI2P` but the configured stream exposes a final `CFA=BGGR`. The payload is still a 12-bit packed CSI-2 stream; only the mosaic order differs, so downstream processing should honour the CFA tag for demosaicing and treat the `sensor_format` as the transport description.
-
-Field log excerpt:
-
+```text
+/rawframe?camera_index=0&exposure=50000&gain=1.0&mode=4056:3040:12:U&accumulations=20&combine=mean
 ```
+
+Important query parameters:
+
+| Parameter | Meaning |
+| --- | --- |
+| `camera_index` | Optional camera index. If it differs from the active camera, the server switches before capture. |
+| `exposure` | Exposure time in microseconds. Default is `2000000`. |
+| `gain` | Analogue gain. Default is `5.0`. |
+| `duration` | Optional capture wait time in milliseconds. If omitted, the server uses exposure-derived timing. |
+| `mode` | Raw mode string in `WIDTH:HEIGHT:BIT_DEPTH:P_or_U` format, for example `4056:3040:12:U`. |
+| `accumulations` | Number of frames to capture. Values are clamped to `1..64`. |
+| `combine` | `stack`, `mean`/`avg`/`average`, or `sum`/`total`. |
+
+Response headers describe how to decode the returned binary payload:
+
+| Header | Meaning |
+| --- | --- |
+| `X-Raw-Shape` | Shape of the returned NumPy-style array. |
+| `X-Raw-DType` | Element dtype, for example `uint16` or `uint64`. |
+| `X-Raw-Mode` | Requested raw mode string. |
+| `X-Raw-CFA` | Final inferred CFA/Bayer pattern after camera configuration. |
+| `X-Raw-Accumulations` | Effective accumulation count. |
+| `X-Raw-Combine` | Effective combine mode. |
+
+`core.py` contains `DataHandler.decode_rawframe()`, which reads these headers case-insensitively and reshapes the raw payload for the Napari client.
+
+## Spectral Acquisition
+
+The spectral workflow has two paths:
+
+- **Full frame**: the client calls `/rawframe`, decodes the raw payload locally, splits the Bayer mosaic into CFA channels, and displays the result as Napari image layers.
+- **Single ROI / Multiple ROI / Multiple ROI Custom**: the client sends the ROI configuration to `/spectral_capture`; the server captures raw data, extracts 1D spectra from the requested regions, and returns compact JSON.
+
+Supported readout setup values:
+
+- `Full frame`
+- `Single ROI`
+- `Multiple ROI`
+- `Multiple ROI Custom`
+
+The server normalizes ROI bounds to the frame size and returns spectra grouped by ROI label and CFA channel. The client can either keep channels separate or average them into combined spectra.
+
+### Spectroscopy math modes
+
+| Mode | Requirement | Meaning |
+| --- | --- | --- |
+| `Intensity` | Snap profile only | Raw/intensity profile. |
+| `Intensity-BG` | Background profile | Subtracts cached BG/dark profile. |
+| `T` | Background and reference profiles | Transmittance-like profile using BG and Ref. |
+| `A` | Background and reference profiles | Absorbance-like profile using BG and Ref. |
+
+The Spectroscopy tab disables modes that do not yet have the needed BG/Ref caches.
+
+## Wavelength Calibration
+
+The Calibration tab maps pixel index to wavelength in nm. Supported model IDs saved in `cam_config.json` are:
+
+- `poly1` — linear fit
+- `poly2` — quadratic fit
+- `poly3` — cubic fit
+- `prism` — prism/Hartmann-style fit
+- `grating` — physical grating-style fit
+- `cauchy` — empirical Cauchy-style fit
+
+After calculation, the client stores coefficients in memory, enables the **X-Axis in nm** option, redraws existing spectra, and saves the updated calibration to `cam_config.json`.
+
+## Napari Tabs
+
+### Locate
+
+- Start/stop live view from `/snapshot.jpg`.
+- Snap JPEG into a new Napari layer using the configured filename pattern.
+- Capture DNG and display a processed RGB preview when `rawpy` is installed.
+- Capture RAW or RAW DNG and display split CFA channels or a grayscale raw image.
+- Toggle an adjustable grid overlay as a Napari Shapes layer.
+
+### Spectroscopy
+
+- Acquire Snap/BG/Ref profiles.
+- Plot spectra with Matplotlib inside the Napari dock widget.
+- Switch between pixel index and calibrated wavelength axis.
+- Export plotted spectra to CSV with the currently selected math mode applied.
+
+### Video
+
+- Start/stop H.264 recording through the server.
+- Uses the prefix entered in the Video tab as the `base` recording name.
+- Current client implementation is intentionally minimal: it starts/stops recording but does not yet expose recording resolution, manual/auto exposure, gain mode, download/playback, elapsed time, or recording status in the Napari UI. Track these under the TODO list below.
+
+### General Settings
+
+Contains nested tabs for:
+
+- Photo settings: server URL, camera, resolution, exposure, and gain.
+- Spectral settings: camera, binning, accumulation, readout setup, ROI settings, and BG/Ref buttons.
+- Saving settings: capture filename root, date/time suffixes, delimiter, numeric suffix counter, and save directory.
+- Calibration: calibration point table, model selection, fitting, and calibration plot.
+
+## Bayer vs CFA Terminology
+
+Picamera2 reports a `sensor_format` such as `SRGGB12` that encodes the pixel packing, bit depth, endianness, and whether the frame is still in its Bayer mosaic. The Color Filter Array (CFA) string names the RGGB/BGGR/GRBG/GBRG mosaic layout used for demosaicing.
+
+When raw output, binning, HDR compositing, transforms, or ISP routing are involved, the mode-table format and the configured stream's final CFA can differ. The server first infers a CFA pattern from sensor-mode metadata, then refines it after configuring the raw stream. Downstream processing should trust the final `X-Raw-CFA` value reported after configuration.
+
+Example from field logs:
+
+```text
 Derived CFA pattern: RGGB from format=SRGGB12_CSI2P unpacked=SRGGB12 cfa entries=None None
 Using raw format SRGGB12 for capture (packing U)
-[22:35:18.032433013] [20486] INFO RPI pisp.cpp:1483 Sensor: ... - Selected sensor format: 4056x3040-SBGGR12_1X12 - Selected CFE format: 4056x3040-PC1B
-[22:35:18.043842753] [20486] INFO RPI pisp.cpp:1483 Sensor: ... - Selected sensor format: 4056x3040-SBGGR12_1X12 - Selected CFE format: 4056x3040-BYR2
+Selected sensor format: 4056x3040-SBGGR12_1X12 - Selected CFE format: 4056x3040-PC1B
+Selected sensor format: 4056x3040-SBGGR12_1X12 - Selected CFE format: 4056x3040-BYR2
 Updated CFA pattern after configure: BGGR (was RGGB)
-Raw file captured. Size: 24709120 bytes. Sending as attachment.
 ```
 
-Here the pre-configuration probe infers an RGGB CFA from the mode table, but once libcamera configures the full-resolution stream it reports BGGR and switches the CFE output from `PC1B` to `BYR2` to match the ISP routing. That flip reflects the ISP applying a transform (such as a sensor mirror or binning layout) before exposing the stream. Always trust the final CFA reported after configuration when selecting a demosaic kernel; the transport format remains `SRGGB12_CSI2P` either way.
-Date: 2026-01-02
+In that case, the transport format remains a 12-bit raw stream, but the final mosaic order is BGGR. Use the CFA tag/header for demosaicing.
 
-2. DETAILED CONTROL DESCRIPTIONS
-================================================================================
-- What it does: artificially enhances edges in the image.
-- < 1.0: Softens the image (useful to hide noise in low light).
-- Default: 1.0
-- What it does: Adjusts the difference between the lightest and darkest parts.
-- Higher: "Punchy" look, deeper blacks, brighter whites.
-- Lower: "Flat" look, more gray. Better for post-processing/CV analysis.
+## Control Notes
 
-SATURATION (0.0 - 32.0)
-- Default: 1.0
-- What it does: Controls color intensity.
-- 0.0: Black and White (Grayscale).
+### Exposure and gain
 
-AWB MODE (Auto White Balance)
-- Range: 0-7
-- Purpose: Compensates for the color tint of your light source.
-- 0: Auto         (Camera analyzes scene and guesses)
-- 1: Incandescent (For standard domestic bulbs - removes yellow tint)
-- 2: Tungsten     (For studio hot lights - similar to Incandescent)
-- 3: Fluorescent  (For office tube lights - removes green tint)
-- 4: Indoor       (General calibration for mixed artificial light)
-- 5: Daylight     (For sunny outdoor scenes - removes blue tint)
-- 6: Cloudy       (For overcast outdoor scenes - warms up the image)
-- 7: Custom       (Disables algos; uses manual ColourGains if provided)
+- `/video` and `/control` accept exposure in microseconds.
+- `/apply_recording_settings` and `/start_recording` support manual/auto exposure and gain modes.
+- Manual exposure is applied through Picamera2 controls such as `ExposureTime`; manual gain uses `AnalogueGain`.
 
-METERING MODE (Auto Exposure)
-- Range: 0-3
-- Purpose: Decides which part of the image dictates the brightness.
-- 0 (Center-Weighted): Prioritizes the middle 50% of the frame.
-- 1 (Spot): Only measures a tiny dot in the center. Essential for backlit subjects.
-- 2 (Matrix): Analyzes the whole frame to find a balanced average.
+### AWB mode reference
 
-HDR MODE (High Dynamic Range)
-- Range: 0-4
-- Purpose: Helps when the scene has both very bright sun and dark shadows.
-- How: The PiSP captures different exposures and merges them.
+| Mode | Lighting description |
+| --- | --- |
+| Auto | Camera analyzes the scene. |
+| Incandescent | Warm domestic bulbs. |
+| Tungsten | Studio hot lights. |
+| Fluorescent | Green-shift office tubes. |
+| Indoor | Mixed artificial light. |
+| Daylight | Sunny outdoor scenes. |
+| Cloudy | Overcast outdoor scenes. |
+| Custom | Manual colour gains if provided by your code/configuration. |
 
-================================================================================
-3. DIGITAL ZOOM (SCALERCROP) & HARDWARE EXECUTION
+### Digital zoom / `ScalerCrop`
 
-	| Mode | CCT Range (K) | Lighting Description |
-	| --- | --- | --- |
-	| Incandescent | 2500 – 3000 | Warm domestic bulbs |
-	| Tungsten | 3000 – 3500 | Studio hot lights |
-	| Fluorescent | 4000 – 4700 | Green-shift office tubes |
-	| Daylight | 5500 – 6500 | Standard sun |
-	| Cloudy | 7000 – 8000 | Overcast sky |
-Coordinates:    ALWAYS relative to full 4056 x 3040 sensor.
+Digital zoom is hardware-accelerated by the Raspberry Pi ISP/PiSP, not by Python code. It crops the sensor area before scaling, so it throws away pixels like any digital zoom, but the operation is handled by the imaging pipeline rather than by CPU-side array slicing.
 
-IS DIGITAL ZOOM "HARDWARE" OR "SOFTWARE"?
------------------------------------------
-It is **Hardware-Accelerated Digital Zoom**.
+Coordinates are normally relative to the full sensor frame, for example the IMX477 full-resolution frame of `4056 x 3040`.
 
-1. It is "Digital":
-	 - Unlike a physical lens zoom, this throws away pixels. 
-	 - If you zoom 2x, you are using only the center 25% of the sensor. 
-	 - You lose resolution, but the image does not get "blocky" if you stay 
-		 within the sensor's limits (e.g., zooming into 1080p from a 12MP sensor 
-		 looks perfect).
+### IMX477 resolution reference
 
-2. It is done in "Hardware" (The ISP):
-	 - The cropping is NOT done by your Python script or the CPU.
-	 - It is handled by the Raspberry Pi 5's dedicated Image Signal Processor (PiSP).
-	 - **Benefit:** It causes ZERO delay or CPU load.
-	 - **Benefit:** It can actually INCREASE framerate. If you crop to a small 
-		 window, the sensor has fewer lines to read, potentially allowing faster FPS.
+| Scale | Resolution | Notes |
+| --- | --- | --- |
+| 1/1 | `4056 x 3040` | Native full 12 MP frame. |
+| 1/2 | `2028 x 1520` | Native binning / useful 3 MP mode. |
+| 1/4 | `1014 x 760` | Integer scale. |
+| 1/8 | `507 x 380` | Integer scale, near low-resolution preview use. |
 
-================================================================================
-4. RESOLUTION MATH (DIVISIONS OF FULL SENSOR)
-================================================================================
-Scale 1/1:  4056 x 3040  (Native Full - 12MP)
-Scale 1/2:  2028 x 1520  (Native Binning - 3MP - Best General Mode)
-Scale 1/4:  1014 x 760   (Integer Scale)
-Scale 1/8:   507 x 380   (Integer Scale - close to 480p)
+## PiSP IMX477 Tuning Profile Notes
 
-## PiSP IMX477 Tuning Profile
-The Raspberry Pi 5 ships distinct Image Signal Processor tuning files for each supported sensor. The PiSP profile located at `/usr/share/libcamera/ipa/rpi/pisp/imx477.json` defines the default behavior for the IMX477 (HQ) camera on RP1-based boards.
+On Raspberry Pi 5 / RP1-based boards, the IMX477 tuning file is typically located at:
 
-- Target Platform: `target` is set to `pisp`, meaning the profile is tailored for the Pi 5 hardware pipeline. Earlier SoCs use BCM2835-oriented tuning and do not expose PiSP-only features such as temporal denoise or hardware HDR blending.
-- Auto Exposure: The `rpi.agc` block defines metering masks for matrix (uniform), center-weighted (gradient emphasis), and spot (tight central cluster) modes. Automatic shutter is capped at 66 ms (normal) or 120 ms (long exposure), while gain tops out at 8.0 or 12.0 respectively; manual overrides can exceed these limits when required.
-- White Balance: `rpi.awb` enumerates fixed correlated color temperature bands, mapping Incandescent (2500–3000 K), Tungsten (3000–3500 K), Fluorescent (4000–4700 K), Daylight (5500–6500 K), and Cloudy (7000–8000 K) to the ISP’s AWB presets.
-- HDR Pipeline: `rpi.hdr` enables dual-exposure fusion with `channel_map` assigning short and long reads. A dedicated Night mode tweaks tone mapping to lift deep shadows (e.g., input 20000 → output 47000) for low-light scenes.
-- Lens Shading: The `rpi.alsc` luminance and chroma LUTs flatten vignetting and color shifts, with separate calibration tables for warm (3000 K) and daylight (5000 K) illumination to accommodate changing white points.
-- Black Level: `rpi.black_level` fixes the sensor’s electrical floor at 4096, ensuring downstream processing treats anything lower as true black.
-- Practical Tips: Night captures benefit from selecting the HDR Night profile or explicitly raising shutter/gain beyond the auto limits. Swapping lenses requires retuning the ALSC tables to avoid color rings or dark corners.
+```text
+/usr/share/libcamera/ipa/rpi/pisp/imx477.json
+```
+
+Useful concepts from the tuning profile:
+
+- The profile target is `pisp`, so it is tailored for the Pi 5 image pipeline.
+- Auto exposure (`rpi.agc`) defines matrix, center-weighted, and spot metering masks.
+- Auto white balance (`rpi.awb`) maps common illuminants such as incandescent, tungsten, fluorescent, daylight, and cloudy.
+- HDR-related tuning can blend different exposures and adjust tone mapping for night/low-light scenes.
+- Lens-shading calibration (`rpi.alsc`) compensates vignetting and colour shifts.
+- Black-level handling defines the sensor floor used by downstream processing.
+
+These tuning details remain useful for understanding preview/recording behaviour, but raw scientific processing should rely on the raw payload, final CFA header, and explicit calibration rather than on ISP-rendered colour output.
+
+## Custom Raw File Format Notes
+
+`/rawframe` returns a headerless binary payload plus HTTP headers. If you save the payload to disk, the default filename generated by the server is:
+
+```text
+capture_cam{ID}_{Width}x{Height}_{Depth}bit_acc{N}_{Timestamp}.raw
+```
+
+The HTTP headers are the authoritative metadata for shape, dtype, mode, CFA, accumulation count, and combine mode.
+
+### Binary data structure
+
+- `stack` mode: returns an accumulated stack-shaped array when multiple frames are captured.
+- `mean` mode: returns one frame averaged from the accumulation stack.
+- `sum` mode: returns one summed frame, normally with a wider dtype such as `uint64`.
+- Raw bytes are emitted exactly as produced/combined by the server. Use `X-Raw-DType` and `X-Raw-Shape` to reconstruct the array.
+
+### Hardware padding / stride
+
+Some raw modes can contain row padding for alignment. Always trust the shape returned by the server and crop to the scientifically valid width if your downstream processing requires a strict active-pixel region.
+
+Reference stride examples that may be relevant for IMX477-style modes:
+
+| Valid width | Padded width | Padding pixels | Bytes per row at 16-bit |
+| --- | --- | --- | --- |
+| 4056 | 4064 | +8 | 8128 bytes |
+| 2028 | 2048 | +20 | 4096 bytes |
+| 1332 | 1344 | +12 | 2688 bytes |
 
 ## Troubleshooting
-- If `/available_cameras` returns empty, confirm Picamera2 is installed and the camera ribbon cable is seated. Run `libcamera-hello` to validate the hardware.
-- For permission errors, add the executing user to the `video` group and reboot.
-- High resolution captures and long exposures can take several seconds. Increase HTTP client timeouts when requesting `/capture_dng` or `/rawframe`.
-- When running on Wi-Fi, prefer Ethernet for high throughput raw downloads.
 
-## Custom Raw File Format Specification
+- If `/available_cameras` is empty, check the ribbon cable, camera power, and Picamera2 installation. Validate with `libcamera-hello` or another Picamera2 test.
+- If the server cannot initialize a camera, make sure no other process is holding the camera device.
+- If a capture fails after switching cameras, retry after confirming the requested camera index exists in `/available_cameras`.
+- High-resolution raw, DNG, long exposure, and multi-accumulation captures can take several seconds. Increase client HTTP timeouts when needed.
+- Prefer Ethernet over Wi-Fi for large raw downloads.
+- If DNG preview fails in Napari, install `rawpy` in the workstation environment.
+- If calibration fitting fails, check that the selected model has enough valid pixel/nm points and that non-polynomial models have reasonable initial guesses.
 
-**File Type:** Headerless Binary Dump  
-**Extension:** `.raw`  
-**Endianness:** Little-Endian  
-**Metadata source:** Filename only (no internal header)
+## TODO / Missing or Incomplete Work
 
-### 1. Filename Convention
+### Packaging and installation
 
-All critical metadata required to parse the file is encoded in the filename string.
+- Make the client installable as a real Napari plugin instead of starting it manually with `python PiCamPlugin.py`.
+- Add plugin metadata, entry points, and packaging files, for example `pyproject.toml`, so the widget can be installed with `pip install -e .` and opened from Napari's plugin menu.
+- Split server and client dependency extras, for example `.[server]` and `.[napari]`, so Raspberry Pi and workstation installs stay clean.
+- Add a small launcher/CLI command after packaging, for example `picam-napari` for the desktop UI and `picam-server` for the Pi server.
 
-Format:  
-`capture_cam{ID}_{Width}x{Height}_{Depth}bit_acc{N}_{Timestamp}.raw`
+### Video workflow
 
-- **Width / Height:** The valid image resolution (e.g., 4056, 3040).
-- **Depth:** The sensor readout bit-depth (`10bit` or `12bit`).
-- **acc{N}:** The accumulation count. `acc1` is a single frame; `acc4` is a stack of 4 frames.
+- Expand the Napari Video tab. The server already has `/start_recording`, `/stop_recording`, and `/download_recording`, but the current client only exposes a recording prefix and start/stop button.
+- Add controls for recording resolution, manual/auto exposure, exposure time, gain mode, and gain value.
+- Show current recording state, output filename, elapsed time, and errors in the Napari status area.
+- Add a download button for the last recording, or a recording browser for files in the server-side `recordings/` directory.
+- Decide whether video should use the Photo Settings camera/resolution or its own dedicated video settings section.
 
-### 2. Binary Data Structure
+### Saving and acquisition workflow
 
-The file consists of a contiguous stream of pixels with no file header.
+- Implement or verify `auto_save_dng`. The setting is persisted in `cam_config.json`, but the current client-side DNG button primarily loads/displays the DNG; confirm disk-save behaviour before relying on it for unattended acquisition.
+- Apply the configured save directory consistently to JPEG snapshots, DNG downloads, raw captures, spectra CSV exports, and recording downloads.
+- Add overwrite protection and clearer filename previews for all capture types, not only Locate snapshots.
+- Consider saving raw capture metadata next to downloaded arrays, for example as JSON sidecars containing shape, dtype, CFA, exposure, gain, accumulation count, and mode.
 
-- **Container Type:**
-  - Standard / Mean Mode: `uint16` (Unsigned 16-bit integer).
-  - Sum Mode: `uint64` (Unsigned 64-bit integer).
-- **Bit Alignment (Critical):** Data is Left-Aligned (MSB aligned) inside the 16-bit container.
-  - **12-bit Mode:** Values range from 0 to 65,520. (Shift right by 4 bits to get 0–4095).
-  - **10-bit Mode:** Values range from 0 to 65,472. (Shift right by 6 bits to get 0–1023).
+### Spectroscopy and calibration
 
-### 3. Hardware Padding (Stride)
+- Add saturation detection and saturation warnings for raw and spectral captures.
+- Add clearer validation for ROI bounds, empty custom ROI rows, and calibration point counts before capture/fitting.
+- Add a way to export/import calibration independently from the full `cam_config.json`.
+- Add tests or reference files for spectral math modes: Intensity, Intensity-BG, T, and A.
 
-The ISP (Image Signal Processor) adds invisible padding pixels to the end of every row for memory alignment. Parsers must read the "Padded Width" and crop to the "Valid Width".
+### Compatibility and robustness
 
-| Valid Width | Stride (Padded Width) | Padding Pixels | Bytes per Row (16-bit) |
-| ----------- | --------------------- | -------------- | ---------------------- |
-| 4056        | 4064                  | +8             | 8,128 bytes            |
-| 2028        | 2048                  | +20            | 4,096 bytes            |
-| 1332        | 1344                  | +12            | 2,688 bytes            |
+- Update the Flask startup hook so the server works with current Flask versions without requiring `Flask<2.3`.
+- Add connection checks in the Napari UI for unreachable server URLs and failed camera refreshes.
+- Improve error handling around camera switching while live view, raw capture, or recording is active.
+- Add a short troubleshooting section for common Picamera2/libcamera permission and camera-busy errors.
 
-TODO: add saturation detection
+### Documentation
+
+- Add screenshots or diagrams of the Napari tabs once the UI stabilizes.
+- Document example command lines for common API calls, including raw capture, spectral capture, DNG capture, and recording download.
+- Keep legacy file names out of the main workflow unless those files are actually present in the repository.
+
+## Known Caveats
+
+- The server uses Flask's development server. For trusted LAN/lab use this is convenient, but for wider network exposure use a production WSGI setup and access controls.
+- Some hardware behaviour depends on the exact Raspberry Pi model, camera sensor, libcamera/Picamera2 version, and sensor modes reported at runtime.

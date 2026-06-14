@@ -1,0 +1,168 @@
+{
+    "camera": {
+        "url": "http://192.168.0.197:8080/",
+        "exposure": 50000,
+        "gain": 1.0,
+        "resolution": "1332x990"
+    },
+    "spectral": {
+        "split_channels": true,
+        "mode": "Intensity",
+        "file": "6Vlamp_neodymium.csv",
+        "ui_settings": {
+            "camera_index": 0,
+            "camera_label": "0: imx477",
+            "mode": "4056:3040:12:U",
+            "binning": "1",
+            "exposure": 50000,
+            "gain": 1.0,
+            "accumulations": 20,
+            "combine": "mean",
+            "readout_setup": "Single ROI",
+            "fullframe": {
+                "horizontal_binning": "1",
+                "vertical_binning": "1"
+            },
+            "single_roi": {
+                "x_left": 0,
+                "width": 2028,
+                "y_top": 0,
+                "height": 1520,
+                "horizontal_binning": "1"
+            },
+            "multiple_roi": {
+                "x_left": 1,
+                "width": 2025,
+                "y_top": 200,
+                "roi_height": 100,
+                "roi_count": 9,
+                "gap": 1
+            },
+            "custom_roi": {
+                "x_left": 0,
+                "width": 2028,
+                "rows": [
+                    {
+                        "top": 200,
+                        "height": 100
+                    },
+                    {
+                        "top": 301,
+                        "height": 100
+                    },
+                    {
+                        "top": 501,
+                        "height": 100
+                    }
+                ]
+            },
+            "split_channels": true
+        }
+    },
+    "saving": {
+        "file_root": "capture",
+        "directory": "C:\\Users\\Petro\\Documents\\git\\picam_server",
+        "auto_save_dng": false,
+        "append_date": false,
+        "append_time": false,
+        "name_delimiter": "_",
+        "use_numeric_suffix": true,
+        "suffix_start": 5,
+        "suffix_next": 53
+    },
+    "calibration": {
+        "wavelength_coeffs": [
+            1.565437871193775e-07,
+            -0.00035538754034736996,
+            0.3769617050655705,
+            308.6349380325625
+        ],
+        "model_type": "poly3",
+        "points": [
+            {
+                "px": "546",
+                "nm": "435.833"
+            },
+            {
+                "px": "659",
+                "nm": "447"
+            },
+            {
+                "px": "730",
+                "nm": "454"
+            },
+            {
+                "px": "791",
+                "nm": "460.4"
+            },
+            {
+                "px": "1003",
+                "nm": "485"
+            },
+            {
+                "px": "1158",
+                "nm": "512"
+            },
+            {
+                "px": "1235",
+                "nm": "529"
+            },
+            {
+                "px": "1269",
+                "nm": "543"
+            },
+            {
+                "px": "1313",
+                "nm": "546"
+            },
+            {
+                "px": "1416",
+                "nm": "573"
+            },
+            {
+                "px": "1428",
+                "nm": "577"
+            },
+            {
+                "px": "1434",
+                "nm": "580"
+            },
+            {
+                "px": "1448",
+                "nm": "585"
+            },
+            {
+                "px": "1460",
+                "nm": "587"
+            },
+            {
+                "px": "1477",
+                "nm": "593"
+            },
+            {
+                "px": "1495",
+                "nm": "598"
+            },
+            {
+                "px": "1529",
+                "nm": "611"
+            },
+            {
+                "px": "1576",
+                "nm": "630"
+            },
+            {
+                "px": "1586",
+                "nm": "642"
+            },
+            {
+                "px": "1620",
+                "nm": "650"
+            },
+            {
+                "px": "1723",
+                "nm": "707"
+            }
+        ]
+    }
+}
